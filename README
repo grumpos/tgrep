@@ -1,0 +1,53 @@
+	
+                        -- TGREP -- 
+ 
+ 
+This small utility was an attempt at a challenge posted by the reddit.com team. 
+Details here: 
+http://www.reddit.com/r/blog/comments/fjgit 
+The task was to parse log files and look for a given time stamp in various formats,  
+then copy those to the standard output, much like grep. 
+ 
+ 
+                        -- Compiling -- 
+ 
+ 
+The build batch files use MSBuild and the path is found using  
+VS100COMNTOOLS env. var.. That means Visual Studio 2010 needs to be installed. 
+ 
+ 
+                        -- Usage -- 
+ 
+ 
+Exact match:                tgrep [PATH] HH:MM:SS 
+Match by minute:        tgrep [PATH] HH:MM 
+Match in range:                tgrep [PATH] HH:MM:SS-HH:MM:SS 
+ 
+Default path is ".\logs\haproxy.log" 
+To generate a test log file in the default location call tgrep with "-genlog" only. 
+ 
+ 
+                        -- Notes -- 
+ 
+ 
+This version does not fulfill all the goals set out by the challenge. 
+ 
+1)It assumes there are no midnight boundaries, that all the logs are on the same day.  
+Midnight jumps can be handled by parsing the day part of the timestamps too and adding  
+that to the total number of seconds being searched. 
+ 
+2)Large file handling is missing. The log file needs to be under the 2GB boundary. 
+Even thou the whole point of tgrep was meant to be that it can scan huge log files fast. 
+The problem was that I did the file IO using ifstream and tellg() just does not like files  
+larger than 2GB - at least not for me -, even thou streamoff/streampos are both  
+64bit integers in x86 and x64 modes. 
+I suspect a cast like (streampos)(int32_t) somewhere deep in the implementation.  
+Using _lseeki64() or just memory mapping the whole log file should sole that. 
+ 
+Still, it shows the basic idea even with these limitations: since the timestamps are in  
+order - thus sorted -, using a binary search on the log lines gives us O(log2 N) performance  
+to find the first matching timestamp, where N is the line count. What I did is to jump around  
+by stream offsets then seek back until I found a beginning of a line. Of course performance depends 
+ on how the file seeking is implemented on the platform. The best solution might be  
+memory mapping on a 64bit architecture; that should take log2 N page loads, tops.
+ 

@@ -9,6 +9,8 @@
 #include <numeric>
 #include <iterator>
 
+#include "raw.h"
+
 using namespace std;
 
 const regex MatchTimeAny("[0-9]*[0-9]:[0-9][0-9]:*[0-9]*[0-9]*.*");
@@ -305,7 +307,7 @@ int main( int argc, char** argv )
 			}
 			else
 			{
-				FindRangeMatches( iff, RangeSubMatches[2], RangeSubMatches[1] );
+				FindRangeMatches( iff, RangeSubMatches[2], RangeSubMatches[1] ); 
 			}
 		}		
 	}	

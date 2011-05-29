@@ -38,23 +38,6 @@ void Usage()
 	cout << "Match in range:\t\ttgrep [PATH] HH:MM:SS-HH:MM:SS" << endl;
 }
 
-void LineSeekBack( ifstream& iff )
-{
-	streamoff Offset = iff.tellg();
-
-	int c = iff.peek();
-	while ( 0 != Offset && c != '\n' )
-	{
-		--Offset;
-		iff.seekg(-1, ios_base::cur);
-		c = iff.peek();
-	}
-
-	if ( 0 != Offset )
-	{
-		iff.ignore();
-	}
-}
 
 uint32_t TimestampToSeconds( const string& Timestamp )
 {
@@ -67,217 +50,174 @@ uint32_t TimestampToSeconds( const string& Timestamp )
 }
 
 // Assuming "\r\n" newlines...
-const char* LineSeekBegin( memmap_t* File, size_t Offset )
+size_t LineSeekBegin( memmap_t* File, const char** Ptr )
 {
 	const char* FileBegin = (const char*)begin(File);
-	const char* b = (const char*)begin(File) + Offset;
+	const char* b = *Ptr;
 	while ( FileBegin != b && '\n' != *b ) 
 		--b;
-	return ++b;
+	++b;	
+	const size_t SeekLength = *Ptr - b;
+	*Ptr = b;
+	return SeekLength;
 };
 
-const char* LineSeekEnd( memmap_t* File, size_t Offset )
+size_t LineSeekEnd( memmap_t* File, const char** Ptr )
 {
 	const char* FileEnd = (const char*)end(File);
-	const char* e = (const char*)begin(File) + Offset;
+	const char* e = *Ptr;
 	while ( FileEnd != e && '\r' != *e ) 
-		++e;	
-	return e;
+		++e;
+	const size_t SeekLength = e - *Ptr;
+	*Ptr = e;
+	return SeekLength;
 };
 
-size_t FindExactMatchAux( memmap_t* LogFile, const uint32_t TargetSeconds, size_t Lo, size_t Hi )
+const char* FindExactMatchAux( memmap_t* LogFile, const uint32_t TargetSeconds, const char* Lo, const char* Hi )
 {
 	if ( Lo > Hi )
 	{
 		cout << "ERROR: Time not found." << endl;
-		return (size_t)-1;
+		return nullptr;
 	}
 
-	size_t Mid = (Lo + Hi) / 2;
+	const char* Mid = Lo + (Hi - Lo) / 2;
 
-	const char* b = LineSeekBegin(LogFile, Mid);
-	const char* e = LineSeekEnd(LogFile, Mid);
+	const char* b = Mid;
+	const char* e = Mid;
+
+	LineSeekBegin(LogFile, &b);
+	LineSeekEnd(LogFile, &e);
 
 	const uint32_t MatchSeconds = TimestampToSeconds( string( b, e ) );
 
 	if ( TargetSeconds == MatchSeconds )
 	{
-		return b - (const char*)begin(LogFile);
+		return b;
 	}
 	else if( TargetSeconds < MatchSeconds )
 	{
-		return FindExactMatchAux( LogFile, TargetSeconds, Lo, b - (const char*)begin(LogFile) );
+		return FindExactMatchAux( LogFile, TargetSeconds, Lo, b );
 	}
 	else
 	{
-		return FindExactMatchAux( LogFile, TargetSeconds, e - (const char*)begin(LogFile), Hi );
+		return FindExactMatchAux( LogFile, TargetSeconds, e, Hi );
 	}
-}
-
-streamoff FindExactMatchAux( ifstream& iff, const uint32_t TargetSeconds, streamoff Lo, streamoff Hi )
-{
-	if ( Lo > Hi )
-	{
-		cout << "ERROR: Time not found." << endl;
-		return (streamoff)-1;
-	}
-
-	streamoff Mid = (Lo + Hi) / 2;
-	iff.seekg(Mid);
-	LineSeekBack(iff);
-	Mid = iff.tellg();
-
-	string Line;
-	getline( iff, Line );
-
-	const uint32_t MatchSeconds = TimestampToSeconds( Line );
-
-	if ( TargetSeconds == MatchSeconds )
-	{
-		return Mid;
-	}
-	else if( TargetSeconds < MatchSeconds )
-	{
-		return FindExactMatchAux( iff, TargetSeconds, Lo, Mid-MinTimestampLenght );
-	}
-	else
-	{
-		return FindExactMatchAux( iff, TargetSeconds, iff.tellg(), Hi );
-	}
-}
-
-streamoff GetFileLength( ifstream& iff )
-{
-	const streampos LastPos = iff.tellg();
-	iff.seekg(0, ios_base::end);
-	const streampos Length = iff.tellg();
-	iff.seekg(LastPos);
-	return Length;
 }
 
 void FindExactMatches( memmap_t* LogFile, const string& TargetTime )
 {
-	const size_t Match = FindExactMatchAux( LogFile, TimestampToSeconds(TargetTime), 0, size(LogFile)-1 );
+	const auto Match = FindExactMatchAux( LogFile, TimestampToSeconds(TargetTime), 
+		(const char*)begin(LogFile), (const char*)end(LogFile) );
 
-	if ( (size_t)-1 != Match )
+	if ( Match )
 	{
 		vector<string> ReadLines;
 		
 		regex MatchTimestamp(string("... .. ")+TargetTime+string(".*"));
 
-		size_t OffsetPrev = Match;
+		const char* b = Match;
+		const char* e = Match;
 
-		string LinePrev( LineSeekBegin(LogFile, OffsetPrev), LineSeekEnd(LogFile, OffsetPrev) );
+		LineSeekEnd(LogFile, &e);
+
+		string LinePrev( b, e );
 		do 
 		{
 			ReadLines.push_back(LinePrev);
 
-			OffsetPrev -= LinePrev.size() + 2;
+			b -= 2;
+			LineSeekBegin(LogFile, &b);
+			e -= LinePrev.size() + 2; // skip "\r\n"
 
-			LinePrev.assign( LineSeekBegin(LogFile, OffsetPrev), LineSeekEnd(LogFile, OffsetPrev) );				
+			LinePrev.assign( b, e );				
 		} while ( regex_match( LinePrev, MatchTimestamp ) );
 
 		for_each( ReadLines.rbegin(), ReadLines.rend(), [](const string& s) { cout << s << endl; } );
 
-		size_t OffsetNext = Match + ReadLines.back().size() + 2;
+		b = Match + ReadLines.back().size() + 2;
+		e = b;
+		LineSeekEnd(LogFile, &e);
 
-		string LineNext( LineSeekBegin(LogFile, OffsetNext), LineSeekEnd(LogFile, OffsetNext) );
-		do 
+		string LineNext( b, e );
+		while ( regex_match( LineNext, MatchTimestamp ) )
 		{
 			cout << LineNext << endl;
 
-			OffsetNext += LineNext.size() + 2; // skip "\r\n"
+			b += LineNext.size() + 2; // skip "\r\n"
+			e = b;
+			LineSeekEnd(LogFile, &e);
 
-			LineNext.assign( LineSeekBegin(LogFile, OffsetNext), LineSeekEnd(LogFile, OffsetNext) );
-		} while ( regex_match( LineNext, MatchTimestamp ) );
+			LineNext.assign( b, e );
+		};
 	}
 }
-//
-//void FindExactMatches( ifstream& iff, const string& TargetTime )
-//{
-//	const streamoff Match = FindExactMatchAux( iff, TimestampToSeconds(TargetTime), 0, GetFileLength(iff)-1 );
-//
-//	if ( -1 != Match )
-//	{
-//		iff.seekg(Match);
-//		LineSeekBack( iff );
-//
-//		streamoff Offset = iff.tellg();
-//
-//		regex MatchTimestamp(string("... .. ")+TargetTime+string(".*"));
-//
-//		while ( 0 != Offset )
-//		{
-//			string Line;
-//			getline(iff, Line);
-//
-//			if ( !regex_match( Line, MatchTimestamp ) )
-//				break;
-//
-//			iff.seekg(Offset-MinTimestampLenght);
-//			LineSeekBack( iff );
-//			Offset = iff.tellg();
-//		}
-//
-//		string Line;
-//		while ( getline(iff, Line) && regex_match( Line, MatchTimestamp ) )
-//		{
-//			cout << Line << endl;
-//		}	
-//	}	
-//}
 
-void FindRangeMatches( ifstream& iff, const string& TargetTimeBegin, const string& TargetTimeEnd )
+void FindRangeMatches( memmap_t* LogFile, const string& TargetTimeBegin, const string& TargetTimeEnd )
 {
-	const streamoff MatchBegin	= FindExactMatchAux( iff, TimestampToSeconds(TargetTimeBegin), 0, GetFileLength(iff)-1 );
-	
-	if ( -1 == MatchBegin )
+	const auto MatchBegin = FindExactMatchAux( LogFile, TimestampToSeconds(TargetTimeBegin), 
+		(const char*)begin(LogFile), (const char*)end(LogFile) );
+
+	if ( !MatchBegin )
 		return;
 
-	const streamoff MatchEnd = FindExactMatchAux( iff, TimestampToSeconds(TargetTimeEnd), MatchBegin, GetFileLength(iff)-1 );
+	const auto MatchEnd = FindExactMatchAux( LogFile, TimestampToSeconds(TargetTimeEnd), 
+		MatchBegin, (const char*)end(LogFile) );
 
-	if ( -1 != MatchEnd )
+	if ( MatchEnd )
 	{
-		iff.seekg(MatchBegin);
-		LineSeekBack( iff );
-
-		streamoff Offset = iff.tellg();
-
 		regex MatchTimestampBegin(string("... .. ")+TargetTimeBegin+string(".*"));
 		regex MatchTimestampEnd(string("... .. ")+TargetTimeEnd+string(".*"));
 
-		// Seek to first match for TargetTimeBegin
-		while ( 0 != Offset )
+		vector<string> ReadLines;
+
+		const char* b = MatchBegin;
+		const char* e = MatchBegin;
+
+		LineSeekEnd(LogFile, &e);
+
+		string LinePrev( b, e );
+		do 
 		{
-			string Line;
-			getline(iff, Line);
+			ReadLines.push_back(LinePrev);
 
-			if ( !regex_match( Line, MatchTimestampBegin ) )
-				break;
+			b -= 2;
+			LineSeekBegin(LogFile, &b);
+			e -= LinePrev.size() + 2; // skip "\r\n"
 
-			iff.seekg(Offset-MinTimestampLenght);
-			LineSeekBack( iff );
-			Offset = iff.tellg();
-		}
+			LinePrev.assign( b, e );				
+		} while ( regex_match( LinePrev, MatchTimestampBegin ) );
 
-		// Print until first match for TargetTimeEnd
-		string Line;
-		while ( getline(iff, Line) && !regex_match( Line, MatchTimestampEnd ) )
+		for_each( ReadLines.rbegin(), ReadLines.rend(), [](const string& s) { cout << s << endl; } );
+
+		b = MatchBegin + ReadLines.back().size() + 2;
+		e = b;
+		LineSeekEnd(LogFile, &e);
+
+		string LineNext( b, e );
+		while ( !regex_match( LineNext, MatchTimestampEnd ) )
 		{
-			cout << Line << endl;
-		}	
+			cout << LineNext << endl;
 
-		cout << Line << endl;
+			b += LineNext.size() + 2; // skip "\r\n"
+			e = b;
+			LineSeekEnd(LogFile, &e);
 
-		// Print all match for TargetTimeEnd
-		while ( getline(iff, Line) && regex_match( Line, MatchTimestampEnd ) )
+			LineNext.assign( b, e );
+		};
+
+		while ( regex_match( LineNext, MatchTimestampEnd ) )
 		{
-			cout << Line << endl;
-		}
-	}	
+			cout << LineNext << endl;
+
+			b += LineNext.size() + 2; // skip "\r\n"
+			e = b;
+			LineSeekEnd(LogFile, &e);
+
+			LineNext.assign( b, e );
+		};
+	}
 }
-
-
 
 int GenTestLog()
 {
@@ -364,36 +304,17 @@ int main( int argc, char** argv )
 		}
 	}
 
-	ifstream iff( Path.c_str() );
-
-	if ( !iff.is_open())
-	{
-		cout << "Error: Wrong path." << endl;
-		return 1;
-	}
-
-	if ( 0 > GetFileLength( iff ) )
-	{
-		cout << "Error: File too big: " << GetFileLength( iff ) << "Max: " << INT32_MAX << endl;
-		return 1;
-	}
-
 	memmap_t* LogFile = open(Path.c_str());
 
-	cout << size(LogFile) << endl;
+	if ( !LogFile )
+	{
+		cout << "Failed to open logfile" << endl;
+		return 1;
+	}
 
 	if ( regex_match( TargetTime, MatchTimeExact ) )
 	{
 		FindExactMatches( LogFile, TargetTime );
-	}
-
-	close(LogFile);
-
-	return 0;
-
-	if ( regex_match( TargetTime, MatchTimeExact ) )
-	{
-		//FindExactMatches( iff, TargetTime );
 	}
 	else if ( regex_match( TargetTime, MatchTimeRange ) )
 	{
@@ -402,18 +323,46 @@ int main( int argc, char** argv )
 		{
 			if ( TimestampToSeconds( RangeSubMatches[1].str()) < TimestampToSeconds( RangeSubMatches[2].str()) )
 			{
-				FindRangeMatches( iff, RangeSubMatches[1], RangeSubMatches[2] );
+				FindRangeMatches( LogFile, RangeSubMatches[1], RangeSubMatches[2] );
 			}
 			else
 			{
-				FindRangeMatches( iff, RangeSubMatches[2], RangeSubMatches[1] ); 
+				FindRangeMatches( LogFile, RangeSubMatches[2], RangeSubMatches[1] ); 
 			}
 		}		
 	}	
 	else if ( regex_match( TargetTime, MatchTimeMinute ) )
 	{
-		FindRangeMatches( iff, TargetTime + string(":00"), TargetTime + string(":59") );
+		FindRangeMatches( LogFile, TargetTime + string(":00"), TargetTime + string(":59") );
 	}
+
+	close(LogFile);
+
+	return 0;
+
+	/*if ( regex_match( TargetTime, MatchTimeExact ) )
+	{
+	FindExactMatches( iff, TargetTime );
+	}
+	else if ( regex_match( TargetTime, MatchTimeRange ) )
+	{
+	smatch RangeSubMatches;
+	if ( regex_search( TargetTime, RangeSubMatches, MatchTimeRange ) )
+	{
+	if ( TimestampToSeconds( RangeSubMatches[1].str()) < TimestampToSeconds( RangeSubMatches[2].str()) )
+	{
+	FindRangeMatches( iff, RangeSubMatches[1], RangeSubMatches[2] );
+	}
+	else
+	{
+	FindRangeMatches( iff, RangeSubMatches[2], RangeSubMatches[1] ); 
+	}
+	}		
+	}	
+	else if ( regex_match( TargetTime, MatchTimeMinute ) )
+	{
+	FindRangeMatches( iff, TargetTime + string(":00"), TargetTime + string(":59") );
+	}*/
 	
 	return 0;
 }

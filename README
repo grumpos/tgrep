@@ -50,4 +50,11 @@ to find the first matching timestamp, where N is the line count. What I did is t
 by stream offsets then seek back until I found a beginning of a line. Of course performance depends 
  on how the file seeking is implemented on the platform. The best solution might be  
 memory mapping on a 64bit architecture; that should take log2 N page loads, tops.
- 
+
+Improvements:
+- mapping files over 2GB still needs x64. Since we only checkshort sections we could map
+only small chunks, say 1MB around the target offset, and search in those for the timestamp.
+When Hi-Lo in the search goes under 1MB we could stop remapping and keep that section.
+This however needs the offset based searching again.
+- the line reading backwards is still ugly. Since regex_match can work with [begin, end[ iterators
+maybe a bidir. iter. for const char* eith reversed patterns could clean it up.

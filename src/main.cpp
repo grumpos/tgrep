@@ -8,27 +8,22 @@
 #include <iomanip>
 #include <numeric>
 #include <iterator>
-
+#include <vector>
 #include "raw.h"
+
+#define __TAG printf("%d\n", __COUNTER__);
 
 using namespace std;
 
-const regex MatchTimeAny("[0-9]*[0-9]:[0-9][0-9]:*[0-9]*[0-9]*.*");
-const regex MatchTimeExact("([0-9]*[0-9]):([0-9][0-9]):([0-9][0-9])");
+const regex MatchTimeAny(	"[0-9]*[0-9]:[0-9][0-9]:*[0-9]*[0-9]*.*");
+const regex MatchTimeExact(	"([0-9]*[0-9]):([0-9][0-9]):([0-9][0-9])");
 const regex MatchTimeMinute("([0-9]*[0-9]):([0-9][0-9])");
-const regex MatchTimeRange("([0-9]*[0-9]:[0-9][0-9]:[0-9][0-9])-([0-9]*[0-9]:[0-9][0-9]:[0-9][0-9])");
+const regex MatchTimeRange(	"([0-9]*[0-9]:[0-9][0-9]:[0-9][0-9])-([0-9]*[0-9]:[0-9][0-9]:[0-9][0-9])");
 
 const string DefaultLogPath		= "logs\\haproxy.log";
 const size_t MinTimestampLenght = 14;
 
-streamoff	GetFileLength( ifstream& iff );
-void		LineSeekBack( ifstream& iff );
 uint32_t	TimestampToSeconds( const string& Timestamp );
-streamoff	FindExactMatchAux( ifstream& iff, const uint32_t TargetSeconds, streamoff Lo, streamoff Hi );
-void		FindExactMatches( ifstream& iff, const string& TargetTime );
-void		FindRangeMatches( ifstream& iff, const string& TargetTimeBegin, const string& TargetTimeEnd );
-
-
 
 void Usage()
 {
@@ -49,6 +44,15 @@ uint32_t TimestampToSeconds( const string& Timestamp )
 		atoi(TargetSubMatches[3].str().c_str());
 }
 
+string SecondsToTimestamp( uint32_t Seconds )
+{
+	ostringstream oss;
+	oss << Seconds / (60*60);
+	oss << ":" << setw(2) << setfill('0') << (Seconds / 60) % 60 << ":";
+	oss << ":" << setw(2) << setfill('0') << Seconds % 60;
+	return oss.str();
+}
+
 // Assuming "\r\n" newlines...
 size_t LineSeekBegin( memmap_t* File, const char** Ptr )
 {
@@ -56,10 +60,12 @@ size_t LineSeekBegin( memmap_t* File, const char** Ptr )
 	const char* b = *Ptr;
 	while ( FileBegin != b && '\n' != *b ) 
 		--b;
-	++b;	
-	const size_t SeekLength = *Ptr - b;
+	if ( FileBegin != b )
+		++b;
+	
 	*Ptr = b;
-	return SeekLength;
+	const size_t BytesLeft = b - FileBegin;
+	return BytesLeft;
 };
 
 size_t LineSeekEnd( memmap_t* File, const char** Ptr )
@@ -68,12 +74,12 @@ size_t LineSeekEnd( memmap_t* File, const char** Ptr )
 	const char* e = *Ptr;
 	while ( FileEnd != e && '\r' != *e ) 
 		++e;
-	const size_t SeekLength = e - *Ptr;
 	*Ptr = e;
-	return SeekLength;
+	const size_t BytesLeft = FileEnd - e;
+	return BytesLeft;
 };
 
-const char* FindExactMatchAux( memmap_t* LogFile, const uint32_t TargetSeconds, const char* Lo, const char* Hi )
+const char* FindExactMatchHelper( memmap_t* LogFile, const uint32_t TargetSeconds, const char* Lo, const char* Hi )
 {
 	if ( Lo > Hi )
 	{
@@ -97,46 +103,67 @@ const char* FindExactMatchAux( memmap_t* LogFile, const uint32_t TargetSeconds, 
 	}
 	else if( TargetSeconds < MatchSeconds )
 	{
-		return FindExactMatchAux( LogFile, TargetSeconds, Lo, b );
+		return FindExactMatchHelper( LogFile, TargetSeconds, Lo, b );
 	}
 	else
 	{
-		return FindExactMatchAux( LogFile, TargetSeconds, e, Hi );
+		return FindExactMatchHelper( LogFile, TargetSeconds, e, Hi );
 	}
+}
+
+void PrintLinesBackward( memmap_t* LogFile, const char* StartOffset, const regex& Pattern )
+{
+	vector<string> ReadLines;
+	
+	const char* b = StartOffset;
+	const char* e = StartOffset;
+	
+	LineSeekBegin(LogFile, &b);
+	LineSeekEnd(LogFile, &e);
+
+	string LinePrev;
+	size_t BytesLeft = (size_t)-1;
+
+	do
+	{
+		BytesLeft = LineSeekBegin(LogFile, &b);
+		LineSeekEnd(LogFile, &e);
+
+		LinePrev = string( b, e );
+
+		if ( !regex_match( LinePrev, Pattern ) )
+			break;
+
+		ReadLines.push_back(LinePrev);
+
+		b -= 2; // skip "\r\n"
+		e = b;
+	} while ( BytesLeft );
+
+	for_each( ReadLines.rbegin(), ReadLines.rend(), [](const string& s) { cout << s << endl; } );
 }
 
 void FindExactMatches( memmap_t* LogFile, const string& TargetTime )
 {
-	const auto Match = FindExactMatchAux( LogFile, TimestampToSeconds(TargetTime), 
+	const auto Match = FindExactMatchHelper( LogFile, TimestampToSeconds(TargetTime), 
 		(const char*)begin(LogFile), (const char*)end(LogFile) );
 
 	if ( Match )
 	{
-		vector<string> ReadLines;
-		
 		regex MatchTimestamp(string("... .. ")+TargetTime+string(".*"));
 
-		const char* b = Match;
-		const char* e = Match;
+		PrintLinesBackward( LogFile, Match, MatchTimestamp );
+		
+		// Skip line of the match; already printed by PrintLinesBackward
+		const char* NextLineBegin = Match;
+		LineSeekEnd(LogFile, &NextLineBegin);
+		NextLineBegin += 2;
 
-		LineSeekEnd(LogFile, &e);
+		const char* b = NextLineBegin;
+		const char* e = b;
 
-		string LinePrev( b, e );
-		do 
-		{
-			ReadLines.push_back(LinePrev);
-
-			b -= 2;
-			LineSeekBegin(LogFile, &b);
-			e -= LinePrev.size() + 2; // skip "\r\n"
-
-			LinePrev.assign( b, e );				
-		} while ( regex_match( LinePrev, MatchTimestamp ) );
-
-		for_each( ReadLines.rbegin(), ReadLines.rend(), [](const string& s) { cout << s << endl; } );
-
-		b = Match + ReadLines.back().size() + 2;
-		e = b;
+		//b = Match + ReadLines.front().size() + 2;
+		//e = b;
 		LineSeekEnd(LogFile, &e);
 
 		string LineNext( b, e );
@@ -155,13 +182,13 @@ void FindExactMatches( memmap_t* LogFile, const string& TargetTime )
 
 void FindRangeMatches( memmap_t* LogFile, const string& TargetTimeBegin, const string& TargetTimeEnd )
 {
-	const auto MatchBegin = FindExactMatchAux( LogFile, TimestampToSeconds(TargetTimeBegin), 
+	const auto MatchBegin = FindExactMatchHelper( LogFile, TimestampToSeconds(TargetTimeBegin), 
 		(const char*)begin(LogFile), (const char*)end(LogFile) );
 
 	if ( !MatchBegin )
 		return;
 
-	const auto MatchEnd = FindExactMatchAux( LogFile, TimestampToSeconds(TargetTimeEnd), 
+	const auto MatchEnd = FindExactMatchHelper( LogFile, TimestampToSeconds(TargetTimeEnd), 
 		MatchBegin, (const char*)end(LogFile) );
 
 	if ( MatchEnd )
@@ -240,16 +267,14 @@ int GenTestLog()
 	ostringstream oss;
 	oss << DatePrefix;	
 
-	for ( uint32_t CurrTime = 0; CurrTime < (60*60*24); ++CurrTime )
+	for ( uint32_t Seconds = 0; Seconds < (60*60*24); ++Seconds )
 	{			
-		oss << CurrTime / Hours << ":";
-		oss << setw(2) << setfill('0') << (CurrTime / Minutes)%60 << ":";
-		oss << setw(2) << setfill('0') << CurrTime%60;
+		oss << SecondsToTimestamp( Seconds );
 
 		const string Timestamp = oss.str();
 		oss.seekp(DatePrefix.size());
 
-		cout << CurrTime << endl;
+		cout << Seconds << endl;
 		
 		for( size_t ii = 10; ii != 0; --ii )
 		{
@@ -303,7 +328,7 @@ int main( int argc, char** argv )
 			return 1;
 		}
 	}
-
+	//shared_ptr<memmap_t> LogFIle2 = shared_ptr<memmap_t>( open(Path.c_str()), ::close );
 	memmap_t* LogFile = open(Path.c_str());
 
 	if ( !LogFile )

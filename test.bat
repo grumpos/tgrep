@@ -1,2 +1,1 @@
-bin\tgrep.exe logs\haproxy.log 18:34:12
-
+bin\tgrep.exe logs\haproxy.log 0:00:01

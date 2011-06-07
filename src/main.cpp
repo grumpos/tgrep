@@ -11,7 +11,7 @@
 #include <vector>
 #include "raw.h"
 
-#define __TAG printf("%d\n", __COUNTER__);
+//#define __TAG printf("%d\n", __COUNTER__);
 
 using namespace std;
 
@@ -22,6 +22,7 @@ const regex MatchTimeRange(	"(\\d*\\d:\\d\\d:\\d\\d)-(\\d*\\d:\\d\\d:\\d\\d)");
 
 const string DefaultLogPath		= "logs\\haproxy.log";
 const size_t MinTimestampLenght = 14;
+const string DefaultDelimiter	= "\r\n";
 
 uint32_t	TimestampToSeconds( const string& Timestamp );
 
@@ -102,6 +103,20 @@ size_t LineSeekEnd( memmap_t* File, const char** Ptr )
 	return BytesLeft;
 };
 
+string GetLine( memmap_t* File, const char* Ptr, const char* Delimiter = "\r\n" )
+{
+	const char* const FileEnd = (const char*)end(File);
+	const size_t DelimLength = strlen(Delimiter);
+	const char* e = Ptr;
+
+	while ( FileEnd > (e + DelimLength) && (0 != memcmp(Delimiter, e, DelimLength)) )
+	{
+		++e;
+	}
+
+	return string(Ptr, e);
+}
+
 const char* FindExactMatchHelper( memmap_t* LogFile, const uint32_t TargetSeconds, const char* Lo, const char* Hi )
 {
 	if ( Lo > Hi )
@@ -119,7 +134,7 @@ const char* FindExactMatchHelper( memmap_t* LogFile, const uint32_t TargetSecond
 	LineSeekBegin(LogFile, &b);
 	LineSeekEnd(LogFile, &e);
 
-	const uint32_t MatchSeconds = TimestampToSeconds( string( b, e ) );
+	const uint32_t MatchSeconds = TimestampToSeconds( string(b, e) );
 
 	if ( TargetSeconds == MatchSeconds )
 	{
@@ -140,10 +155,8 @@ void PrintLinesBackward( memmap_t* LogFile, const char* StartOffset, const regex
 	vector<string> ReadLines;
 	
 	const char* b = StartOffset;
-	const char* e = StartOffset;
 	
 	LineSeekBegin(LogFile, &b);
-	LineSeekEnd(LogFile, &e);
 
 	string LinePrev;
 	size_t BytesLeft = (size_t)-1;
@@ -151,9 +164,8 @@ void PrintLinesBackward( memmap_t* LogFile, const char* StartOffset, const regex
 	do
 	{
 		BytesLeft = LineSeekBegin(LogFile, &b);
-		LineSeekEnd(LogFile, &e);
 
-		LinePrev = string( b, e );
+		LinePrev = GetLine( LogFile, b );
 
 		if ( !regex_match( LinePrev, Pattern ) )
 			break;
@@ -161,7 +173,6 @@ void PrintLinesBackward( memmap_t* LogFile, const char* StartOffset, const regex
 		ReadLines.push_back(LinePrev);
 
 		b -= 2; // skip "\r\n"
-		e = b;
 	} while ( BytesLeft );
 
 	for_each( ReadLines.rbegin(), ReadLines.rend(), [](const string& s) { cout << s << endl; } );
@@ -181,25 +192,18 @@ void FindExactMatches( memmap_t* LogFile, const string& TargetTime )
 		// Skip line of the match; already printed by PrintLinesBackward
 		const char* NextLineBegin = Match;
 		LineSeekEnd(LogFile, &NextLineBegin);
-		NextLineBegin += 2;
+		NextLineBegin += DefaultDelimiter.length();
 
 		const char* b = NextLineBegin;
-		const char* e = b;
 
-		//b = Match + ReadLines.front().size() + 2;
-		//e = b;
-		LineSeekEnd(LogFile, &e);
-
-		string LineNext( b, e );
+		string LineNext = GetLine( LogFile, b );
 		while ( regex_match( LineNext, MatchTimestamp ) )
 		{
 			cout << LineNext << endl;
 
 			b += LineNext.size() + 2; // skip "\r\n"
-			e = b;
-			LineSeekEnd(LogFile, &e);
 
-			LineNext.assign( b, e );
+			LineNext = GetLine( LogFile, b );
 		};
 	}
 }
@@ -220,52 +224,33 @@ void FindRangeMatches( memmap_t* LogFile, const string& TargetTimeBegin, const s
 		regex MatchTimestampBegin(string("... .. ")+TargetTimeBegin+string(".*"));
 		regex MatchTimestampEnd(string("... .. ")+TargetTimeEnd+string(".*"));
 
-		vector<string> ReadLines;
+		PrintLinesBackward( LogFile, MatchBegin, MatchTimestampBegin );
 
-		const char* b = MatchBegin;
-		const char* e = MatchBegin;
+		// Print between MatchBegin-MatchEnd
+		const char* NextLineBegin = MatchBegin;
+		LineSeekEnd(LogFile, &NextLineBegin);
+		NextLineBegin += DefaultDelimiter.length();
 
-		LineSeekEnd(LogFile, &e);
+		const char* b = NextLineBegin;
 
-		string LinePrev( b, e );
-		do 
-		{
-			ReadLines.push_back(LinePrev);
-
-			b -= 2;
-			LineSeekBegin(LogFile, &b);
-			e -= LinePrev.size() + 2; // skip "\r\n"
-
-			LinePrev.assign( b, e );				
-		} while ( regex_match( LinePrev, MatchTimestampBegin ) );
-
-		for_each( ReadLines.rbegin(), ReadLines.rend(), [](const string& s) { cout << s << endl; } );
-
-		b = MatchBegin + ReadLines.back().size() + 2;
-		e = b;
-		LineSeekEnd(LogFile, &e);
-
-		string LineNext( b, e );
+		string LineNext = GetLine( LogFile, b );
 		while ( !regex_match( LineNext, MatchTimestampEnd ) )
 		{
 			cout << LineNext << endl;
 
 			b += LineNext.size() + 2; // skip "\r\n"
-			e = b;
-			LineSeekEnd(LogFile, &e);
 
-			LineNext.assign( b, e );
+			LineNext = GetLine( LogFile, b );
 		};
 
+		// Print past MatchEnd
 		while ( regex_match( LineNext, MatchTimestampEnd ) )
 		{
 			cout << LineNext << endl;
 
 			b += LineNext.size() + 2; // skip "\r\n"
-			e = b;
-			LineSeekEnd(LogFile, &e);
 
-			LineNext.assign( b, e );
+			LineNext = GetLine( LogFile, b );
 		};
 	}
 }

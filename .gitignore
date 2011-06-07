@@ -1,0 +1,6 @@
+*.*~
+logs/*.*
+!logs/
+vsproj/tgrep/
+!vsproj/tgrep/tgrep.sln
+!vsproj/tgrep/tgrep.projx

@@ -15,10 +15,10 @@
 
 using namespace std;
 
-const regex MatchTimeAny(	"[0-9]*[0-9]:[0-9][0-9]:*[0-9]*[0-9]*.*");
-const regex MatchTimeExact(	"([0-9]*[0-9]):([0-9][0-9]):([0-9][0-9])");
-const regex MatchTimeMinute("([0-9]*[0-9]):([0-9][0-9])");
-const regex MatchTimeRange(	"([0-9]*[0-9]:[0-9][0-9]:[0-9][0-9])-([0-9]*[0-9]:[0-9][0-9]:[0-9][0-9])");
+const regex MatchTimeAny(	"\\d*\\d:\\d\\d:*\\d*\\d*.*");
+const regex MatchTimeExact(	"(\\d*\\d):(\\d\\d):(\\d\\d)");
+const regex MatchTimeMinute("(\\d*\\d):(\\d\\d)");
+const regex MatchTimeRange(	"(\\d*\\d:\\d\\d:\\d\\d)-(\\d*\\d:\\d\\d:\\d\\d)");
 
 const string DefaultLogPath		= "logs\\haproxy.log";
 const size_t MinTimestampLenght = 14;
@@ -36,20 +36,29 @@ void Usage()
 
 uint32_t TimestampToSeconds( const string& Timestamp )
 {
-	smatch TargetSubMatches;
-	regex_search( Timestamp, TargetSubMatches, MatchTimeExact );
-	return
-		atoi(TargetSubMatches[1].str().c_str())*60*60 +
-		atoi(TargetSubMatches[2].str().c_str())*60 +
-		atoi(TargetSubMatches[3].str().c_str());
+	smatch HHMMSS;
+
+	if ( regex_search( Timestamp, HHMMSS, MatchTimeExact ) )
+	{
+		return
+			atoi(HHMMSS[1].str().c_str())*60*60 +
+			atoi(HHMMSS[2].str().c_str())*60 +
+			atoi(HHMMSS[3].str().c_str());
+	}
+
+	return -1;
 }
 
 string SecondsToTimestamp( uint32_t Seconds )
 {
 	ostringstream oss;
+
 	oss << Seconds / (60*60);
+
 	oss << ":" << setw(2) << setfill('0') << (Seconds / 60) % 60 << ":";
+
 	oss << ":" << setw(2) << setfill('0') << Seconds % 60;
+
 	return oss.str();
 }
 
@@ -58,13 +67,21 @@ size_t LineSeekBegin( memmap_t* File, const char** Ptr )
 {
 	const char* FileBegin = (const char*)begin(File);
 	const char* b = *Ptr;
-	while ( FileBegin != b && '\n' != *b ) 
+
+	while ( FileBegin != b && '\n' != *b )
+	{
 		--b;
+	}
+
 	if ( FileBegin != b )
+	{
 		++b;
+	}
 	
 	*Ptr = b;
+
 	const size_t BytesLeft = b - FileBegin;
+
 	return BytesLeft;
 };
 
@@ -72,10 +89,16 @@ size_t LineSeekEnd( memmap_t* File, const char** Ptr )
 {
 	const char* FileEnd = (const char*)end(File);
 	const char* e = *Ptr;
-	while ( FileEnd != e && '\r' != *e ) 
+
+	while ( FileEnd != e && '\r' != *e )
+	{
 		++e;
+	}
+
 	*Ptr = e;
+
 	const size_t BytesLeft = FileEnd - e;
+
 	return BytesLeft;
 };
 
@@ -83,11 +106,12 @@ const char* FindExactMatchHelper( memmap_t* LogFile, const uint32_t TargetSecond
 {
 	if ( Lo > Hi )
 	{
-		cout << "ERROR: Time not found." << endl;
+		cout << "ERROR: Time not found: " << SecondsToTimestamp(TargetSeconds) << endl;
+
 		return nullptr;
 	}
 
-	const char* Mid = Lo + (Hi - Lo) / 2;
+	const char* Mid = Lo + ptrdiff_t(Hi - Lo) / 2;
 
 	const char* b = Mid;
 	const char* e = Mid;
@@ -328,7 +352,7 @@ int main( int argc, char** argv )
 			return 1;
 		}
 	}
-	//shared_ptr<memmap_t> LogFIle2 = shared_ptr<memmap_t>( open(Path.c_str()), ::close );
+
 	memmap_t* LogFile = open(Path.c_str());
 
 	if ( !LogFile )
@@ -363,31 +387,5 @@ int main( int argc, char** argv )
 
 	close(LogFile);
 
-	return 0;
-
-	/*if ( regex_match( TargetTime, MatchTimeExact ) )
-	{
-	FindExactMatches( iff, TargetTime );
-	}
-	else if ( regex_match( TargetTime, MatchTimeRange ) )
-	{
-	smatch RangeSubMatches;
-	if ( regex_search( TargetTime, RangeSubMatches, MatchTimeRange ) )
-	{
-	if ( TimestampToSeconds( RangeSubMatches[1].str()) < TimestampToSeconds( RangeSubMatches[2].str()) )
-	{
-	FindRangeMatches( iff, RangeSubMatches[1], RangeSubMatches[2] );
-	}
-	else
-	{
-	FindRangeMatches( iff, RangeSubMatches[2], RangeSubMatches[1] ); 
-	}
-	}		
-	}	
-	else if ( regex_match( TargetTime, MatchTimeMinute ) )
-	{
-	FindRangeMatches( iff, TargetTime + string(":00"), TargetTime + string(":59") );
-	}*/
-	
 	return 0;
 }

@@ -15,10 +15,10 @@
 
 using namespace std;
 
-const regex MatchTimeAny(	"\\d*\\d:\\d\\d:*\\d*\\d*.*");
-const regex MatchTimeExact(	"(\\d*\\d):(\\d\\d):(\\d\\d)");
-const regex MatchTimeMinute("(\\d*\\d):(\\d\\d)");
-const regex MatchTimeRange(	"(\\d*\\d:\\d\\d:\\d\\d)-(\\d*\\d:\\d\\d:\\d\\d)");
+const regex MatchTimeAny(	"\\d+:\\d{2}:*\\d*\\d*.*");
+const regex MatchTimeExact(	"(\\d+):(\\d{2}):(\\d{2})");
+const regex MatchTimeMinute("(\\d+):(\\d{2})");
+const regex MatchTimeRange(	"(\\d+:\\d{2}:\\d{2})-(\\d+:\\d{2}:\\d{2})");
 
 const string DefaultLogPath		= "logs\\haproxy.log";
 const size_t MinTimestampLenght = 14;
@@ -47,7 +47,7 @@ uint32_t TimestampToSeconds( const string& Timestamp )
 			atoi(HHMMSS[3].str().c_str());
 	}
 
-	return -1;
+	return (uint32_t)-1;
 }
 
 string SecondsToTimestamp( uint32_t Seconds )
@@ -125,8 +125,20 @@ const char* FindExactMatchHelper( memmap_t* LogFile, const uint32_t TargetSecond
 
 		return nullptr;
 	}
+	
+	const uint32_t LoSeconds	= TimestampToSeconds(GetLine( LogFile, Lo ));
+	const uint32_t Temp			= TimestampToSeconds(GetLine( LogFile, Hi ));
+	const uint32_t HiSeconds	= (Temp == -1) ? 60*60*24 : Temp;
+	
+	ptrdiff_t InterpolatedMid = ptrdiff_t(
+		double(Hi - Lo) * 
+		double(TargetSeconds - LoSeconds) / 
+		double(HiSeconds - LoSeconds)
+	);
+	//cout << double(TargetSeconds - LoSeconds) / double(HiSeconds - LoSeconds)  << endl;
 
-	const char* Mid = Lo + ptrdiff_t(Hi - Lo) / 2;
+	const char* Mid = Lo + InterpolatedMid;
+	//const char* Mid = Lo + ptrdiff_t(Hi - Lo) / 2;
 
 	const char* b = Mid;
 	const char* e = Mid;
@@ -146,7 +158,7 @@ const char* FindExactMatchHelper( memmap_t* LogFile, const uint32_t TargetSecond
 	}
 	else
 	{
-		return FindExactMatchHelper( LogFile, TargetSeconds, e, Hi );
+		return FindExactMatchHelper( LogFile, TargetSeconds, e+DefaultDelimiter.length(), Hi );
 	}
 }
 
@@ -259,8 +271,6 @@ int GenTestLog()
 {
 	cout << "Generating test log file...";
 
-	const uint32_t	Hours			= 60*60;
-	const uint32_t	Minutes			= 60;
 	const string	DatePrefix		= "Feb 10 ";
 	const string	Postfixes[]		= { "egaewgawegkljh", "fo98fyf98", "F87Y3F7Y3F", "hdf8di7y", "387hf" };
 
